@@ -139,4 +139,97 @@ write.csv(animals, here::here("data", paste0("obs_monument_animals", Sys.Date(),
 
 # Logbook Data  -----------------------------------------------------------
 
+# udp.v_hms_extraction_lh
+  # filter on SET_YEAR, VESSEL_ID_NUMBER
+v_hms_qry <- "select * 
+              from udp.v_hms_extraction_lh
+              where set_year > 2015 
+              and vessel_id_number in 
+              ('627357', '1275363', '615907', '1026595', '557860', 'NJ0746GN', '622027')"
 
+logbook_v <- dbGetQuery(jdbConnection, v_hms_qry)
+
+# so what vessels are there? 
+table(logbook_v$VESSEL_ID_NUMBER)
+
+# or we can pull directly from the UDP tables
+udp_logbook_qry <- "select distinct
+			      t.logbook_key,
+			      t.batch_number,
+            a.original_batch_sequence_number,
+			      t.schedule_number,
+			      t.vessel_id,
+			      t.landing_date, 
+            a.set_date, 
+            a.begin_set_time, 
+            a.begin_set_meridian, 
+            a.end_set_time, 
+            a.end_set_meridian,
+            a.haulback_date, 
+            a.begin_haulback_time, 
+            a.begin_haulback_meridian, 
+            a.end_haulback_time, 
+            a.end_haulback_meridian,
+            a.latitude_degrees, 
+            a.latitude_minutes, 
+            a.latitude_hemisphere, 
+            a.longitude_degrees, 
+            a.longitude_minutes, 
+            a.LONGITUDE_HEMISPHERE, 
+			      c.area_fished,
+			      g.gear_code_nmfs, 
+		        gc.gear_name, 
+			      gc.gear_class, 
+            c.species_code_nmfs, 
+            sc.nmfs_common, 
+            sc.scientific_name, 
+            sc.species_itis,
+            cd.number_of_individuals,
+            c.total_whole_pounds, 
+            cd.disposition_status
+		from udp.fls_trips t
+			left join udp.fls_fishing_activities a on t.logbook_key = a.logbook_key
+			left join udp.fls_gears_fished g on a.fishing_activity_key = g.fishing_activity_key
+			left join udp.fls_catches c on g.gear_fished_key = c.gear_fished_key 
+			left join udp.fls_gear_codes_nmfs gc on g.gear_code_nmfs = gc.gear_code_nmfs
+			left join udp.fls_gear_descriptions gd on g.gear_fished_key = gd.gear_fished_key
+			left join udp.fls_gear_parameter_codes gp on gd.gear_parameter_code = gp.gear_parameter_code
+			left join UDP.QC_VAL_TRIP qc on t.SCHEDULE_NUMBER = qc.SCHEDULE_NUMBER
+            /* adidtional parameters looped in to include weights */
+      left join udp.fls_species_codes_nmfs sc on (c.species_code_nmfs = sc.species_code_nmfs)
+      left join udp.fls_catch_descriptions cd on (c.catch_key = cd.catch_key)
+		where
+			t.landing_date > to_date('31-DEC-2015','dd-mon-yyyy') 
+			AND qc.DELETED_DATE IS NULL 
+            and t.vessel_id in ('627357', '1275363', '615907', '1026595', '557860', 'NJ0746GN', '622027')
+		order by t.batch_number, t.schedule_number"
+
+logbook_t <- dbGetQuery(jdbConnection, udp_logbook_qry)
+
+## quick look to check for consistency across these two data
+# good - same vessels
+table(logbook_t$VESSEL_ID)
+table(logbook_v$VESSEL_ID_NUMBER)
+
+# trips - good 
+logbook_t %>% 
+  group_by(VESSEL_ID) %>%
+  summarize(trip_count = n_distinct(SCHEDULE_NUMBER))
+
+logbook_v %>%
+  group_by(VESSEL_ID_NUMBER) %>%
+  summarize(trip_count = n_distinct(TRIP_NUMBER))
+
+# sets - good 
+logbook_t %>% 
+  group_by(VESSEL_ID) %>%
+  summarize(trip_count = n_distinct(ORIGINAL_BATCH_SEQUENCE_NUMBER))
+
+logbook_v %>%
+  group_by(VESSEL_ID_NUMBER) %>%
+  summarize(trip_count = n_distinct(BATCH_SEQUENCE_NUMBER))
+
+
+# write these files 
+write.csv(logbook_t, here::here("data", paste0("logbook_monument_tabs_", Sys.Date(), ".csv")))
+write.csv(logbook_v, here::here("data", paste0("logbook_monument_viewExtract", Sys.Date(), ".csv")))
