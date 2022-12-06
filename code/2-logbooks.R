@@ -16,6 +16,7 @@ library(here)
 library(sf) 
 library(ggplot2)
 library(leaflet)
+library(tidyr)
 
 
 # Load Data ---------------------------------------------------------------
@@ -148,3 +149,30 @@ write_xlsx(monument_lb_nobuff,
            here::here("output", paste0("logbook_sets_monument_noBuffer_", Sys.Date(), ".xlsx")))
 
 
+
+# Output ------------------------------------------------------------------
+
+# Total Number of trips - by year and vessel 
+lb_trips_tot <- logbook_sets %>% 
+  mutate(YEAR = str_sub(LANDING_DATE, 1, 4)) %>%
+  group_by(VESSEL_ID, YEAR) %>%
+  summarize(n_trips = n_distinct(SCHEDULE_NUMBER)) %>%
+  pivot_wider(id_cols = VESSEL_ID, 
+              names_from = YEAR, 
+              values_from = n_trips)
+
+# Total Number of sets 
+lb_sets_tot <- logbook_sets %>% 
+  mutate(YEAR = str_sub(LANDING_DATE, 1, 4)) %>%
+  group_by(VESSEL_ID, YEAR) %>%
+  summarize(n_sets = n_distinct(ORIGINAL_BATCH_SEQUENCE_NUMBER)) %>%
+  pivot_wider(id_cols = VESSEL_ID, 
+              names_from = YEAR, 
+              values_from = n_sets)
+
+
+# export 
+tot_trips_sets <- list(lb_trips_tot, lb_sets_tot)
+names(tot_trips_sets) <- c("TotTrips", "TotSets")
+write_xlsx(tot_trips_sets, 
+           here::here("output", paste0("total_trips_sets_", Sys.Date(), ".xlsx")))

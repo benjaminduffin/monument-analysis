@@ -44,6 +44,8 @@ edlr <- read_sheet("https://docs.google.com/spreadsheets/d/1LNu4Yzezguc5V_t4Irzo
 bft <- read_xlsx(here::here("data", "bft_monument_2022-12-05.xlsx"), 
                  sheet = 1)
 
+# and quickly subset for just >2015
+bft <- subset(bft, LANDING.YEAR > 2015)
 
 
 # Identifying Potential Monument Landings ---------------------------------
@@ -93,5 +95,91 @@ edlr <- edlr %>%
 table(edlr$mon_activity)
 table(is.na(edlr$mon_activity))
 
+# check - good all accounted for 
+unique(edlr$TRIP_ID[edlr$mon_activity == 1])
+
 
 ### BFT ###
+
+glimpse(bft)
+
+# make better variable names 
+names(bft) <- toupper(make.names(names(bft)))
+
+# make subset of the data for identifying those in monument buffer 
+bft_sub <- bft %>% 
+  select(COAST.GUARD.NBR, LANDING.DATE, DEALER.NAME, DEALER.RPT.ID) %>%
+  distinct()
+
+# check for direct matches 
+table(paste0(lb_mon_sub$VESSEL_ID, ".", lb_mon_sub$LANDING_DATE) %in% 
+        paste0(bft_sub$COAST.GUARD.NBR, ".", bft_sub$LANDING.DATE)) # 3 false 
+
+lb_mon_sub$ves.date_in_bft <- ifelse(paste0(lb_mon_sub$VESSEL_ID, ".", lb_mon_sub$LANDING_DATE) %in% 
+                                       paste0(bft_sub$COAST.GUARD.NBR, ".", bft_sub$LANDING.DATE), 
+                                     "x", NA)
+lb_mon_sub
+
+# are these just without bluefin tuna? 
+# one had a BFT - 221015587; dates differed ()
+nobft <- logbook %>% 
+  filter(VESSEL_ID == '1026595', 
+         LANDING_DATE %in% c("2018-10-09", "2021-08-28", "2021-09-23")) %>%
+  group_by(SCHEDULE_NUMBER, NMFS_COMMON, DISPOSITION_STATUS) %>%
+  summarize(n_animals = sum(NUMBER_OF_INDIVIDUALS))
+
+## sidebar: where does this line up with the dealer data? 
+# 
+edlr %>% # also 8/30/22
+  filter(TRIP_ID == '221015587')
+
+## End sidebar
+
+# pull data from BFT that is potentially close to the monument 
+
+# Output ------------------------------------------------------------------
+
+# Total landings by vessel and year 
+
+# edlr -- caveat - all reported landings - can dive deeper in the grades etc. 
+edlr_landings <- edlr %>%
+  mutate(YEAR = str_sub(DATE_LANDED, 1, 4), 
+         vessel_rev = REPORTED_QUANTITY * PURCHASE_PRICE) %>%
+  filter(is.na(`not included`)) %>%
+  group_by(SUPPLIER_VESSEL_ID,  COMMON_NAME_AS_REPORTED) %>%
+  summarize(Dealer_Landings = sum(REPORTED_QUANTITY), 
+            Total_Dollars = sum(vessel_rev))
+  
+
+# bft 
+bft_landings <- bft %>% 
+  group_by(COAST.GUARD.NBR, LANDING.YEAR) %>%
+  summarize(BFT_Landings = sum(REPORTED.QUANTITY), 
+            Total_Dollars = sum(DOLLARS))
+  
+landings <- list(edlr_landings, bft_landings)
+names(landings) <- c("eDealer Landings", "BFT Landings")
+
+write_xlsx(landings, 
+           here::here("output", paste0("BFT_eDealer_landings_", Sys.Date(), ".xlsx")))
+
+
+# output plots 
+# edealer landings 
+ggplot(data = edlr_landings) + 
+  geom_bar(aes(x = as.character(SUPPLIER_VESSEL_ID), y = Dealer_Landings, fill = COMMON_NAME_AS_REPORTED), 
+           stat = "identity", position = "dodge") +
+  labs(x = "Vessel", y = "Reported Quantity (lbs)")
+
+# edealer dollars
+ggplot(data = edlr_landings) + 
+  geom_bar(aes(x = as.character(SUPPLIER_VESSEL_ID), y = Total_Dollars, fill = COMMON_NAME_AS_REPORTED), 
+           stat = "identity", position = "dodge") +
+  labs(x = "Vessel", y = "Total Dollars")
+
+ggplot(data = bft_landings) + 
+  geom_line(aes(x = LANDING.YEAR, y = BFT_Landings), size = 1.25, color = "red") + 
+  geom_point(aes(x = LANDING.YEAR, y = BFT_Landings), color = "red") +
+  geom_line(aes(x = LANDING.YEAR, y = Total_Dollars), size = 1.25, color = "forestgreen") + 
+  geom_point(aes(x = LANDING.YEAR, y = Total_Dollars), color = "forestgreen") +
+  labs(x = "Year", y = "Value", title = "BFT Landings (lbs, red); BFT Total Dollars ($, green)")
