@@ -108,6 +108,13 @@ monument_lb_neg <- st_difference(lb_sets_sf, monument_buff)
 monument_4326 <- st_transform(monument, 4326)
 monument_lb_nobuff <- st_intersection(lb_sets_sf, monument_4326)
 
+# indicating which are in/out of buffer
+lb_sets_sf$in_buffer <- ifelse(lb_sets_sf$ORIGINAL_BATCH_SEQUENCE_NUMBER %in% monument_lb$ORIGINAL_BATCH_SEQUENCE_NUMBER, 
+                               "Y", "N")
+
+table(lb_sets_sf$in_buffer)
+
+
 # quick plot 
 ggplot() + 
   geom_sf(data = monument_buff) + 
@@ -153,7 +160,7 @@ write_xlsx(monument_lb_nobuff,
 # Output ------------------------------------------------------------------
 
 # Total Number of trips - by year and vessel 
-lb_trips_tot <- logbook_sets %>% 
+lb_trips_tot_w <- logbook_sets %>% 
   mutate(YEAR = str_sub(LANDING_DATE, 1, 4)) %>%
   group_by(VESSEL_ID, YEAR) %>%
   summarize(n_trips = n_distinct(SCHEDULE_NUMBER)) %>%
@@ -162,7 +169,7 @@ lb_trips_tot <- logbook_sets %>%
               values_from = n_trips)
 
 # Total Number of sets 
-lb_sets_tot <- logbook_sets %>% 
+lb_sets_tot_w <- logbook_sets %>% 
   mutate(YEAR = str_sub(LANDING_DATE, 1, 4)) %>%
   group_by(VESSEL_ID, YEAR) %>%
   summarize(n_sets = n_distinct(ORIGINAL_BATCH_SEQUENCE_NUMBER)) %>%
@@ -171,8 +178,50 @@ lb_sets_tot <- logbook_sets %>%
               values_from = n_sets)
 
 
-# export 
-tot_trips_sets <- list(lb_trips_tot, lb_sets_tot)
+# export - wide format
+tot_trips_sets <- list(lb_trips_tot_w, lb_sets_tot_w)
 names(tot_trips_sets) <- c("TotTrips", "TotSets")
 write_xlsx(tot_trips_sets, 
            here::here("output", paste0("total_trips_sets_", Sys.Date(), ".xlsx")))
+
+
+# need year, n_trips, n_sets, n_trips with activity in buffer, n_sets with activity in buffer 
+# tot trips
+f_trips <- logbook_sets %>% 
+  mutate(YEAR = str_sub(LANDING_DATE, 1, 4)) %>%
+  group_by(VESSEL_ID, YEAR) %>%
+  summarize(n_trips = n_distinct(SCHEDULE_NUMBER))
+# tot sets 
+f_sets <- logbook_sets %>% 
+  mutate(YEAR = str_sub(LANDING_DATE, 1, 4)) %>%
+  group_by(VESSEL_ID, YEAR) %>%
+  summarize(n_sets = n_distinct(ORIGINAL_BATCH_SEQUENCE_NUMBER))
+# tot trips in 
+f_trips_in <- lb_sets_sf %>% 
+  mutate(YEAR = str_sub(LANDING_DATE, 1, 4)) %>%
+  filter(in_buffer == "Y") %>%
+  group_by(VESSEL_ID, YEAR) %>%
+  summarize(n_trips_in = n_distinct(SCHEDULE_NUMBER)) %>%
+  st_drop_geometry()
+# tot sets in 
+f_sets_in <- lb_sets_sf %>% 
+  mutate(YEAR = str_sub(LANDING_DATE, 1, 4)) %>%
+  filter(in_buffer == "Y") %>%
+  group_by(VESSEL_ID, YEAR) %>%
+  summarize(n_sets_in = n_distinct(ORIGINAL_BATCH_SEQUENCE_NUMBER)) %>%
+  st_drop_geometry()
+
+# merge all together 
+f_lb <- merge(f_trips, f_sets, all = T)
+f_lb <- merge(f_lb, f_trips_in, all = T)
+f_lb <- merge(f_lb, f_sets_in, all = T)
+
+f_lb <- f_lb %>% 
+  mutate(perc_trips_in = round(n_trips_in / n_trips, 2), 
+         perc_sets_in = round(n_sets_in / n_sets, 2)
+         ) %>%
+  replace(is.na(.), 0) 
+
+# write this file 
+write_xlsx(f_lb, 
+           here::here("output", paste0("final_trips_sets_", Sys.Date(), ".xlsx")))
