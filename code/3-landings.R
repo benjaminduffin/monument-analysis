@@ -7,6 +7,10 @@
 # this script indentifies which dealer data corresponds to trips with effort 
 # inside the monument buffer zone
 
+
+# BFT round to dressed weight conversion factor: 0.8
+
+
 # Libraries ---------------------------------------------------------------
 
 library(writexl)
@@ -19,6 +23,7 @@ library(ggplot2)
 library(leaflet)
 library(googlesheets4)
 library(googledrive)
+library(tidyr)
 
 
 # Load Data ---------------------------------------------------------------
@@ -35,7 +40,8 @@ lb_mon <- read_xlsx(here::here("output", "logbook_sets_monument_buffer_2022-12-0
 logbook <- read.csv(here::here("data", "logbook_monument_tabs_2022-12-05.csv"), stringsAsFactors = F)
 
 # read in the eDealer data 
-edlr <- read_sheet("https://docs.google.com/spreadsheets/d/1LNu4Yzezguc5V_t4Irzo6bTddzceznDxHZpN8ir4cU4/edit?usp=sharing")
+edlr <- read_sheet("https://docs.google.com/spreadsheets/d/1LNu4Yzezguc5V_t4Irzo6bTddzceznDxHZpN8ir4cU4/edit?usp=sharing", 
+                   sheet = "raw data")
 # read in the BFT data 
 # commented out, saved locally
 # drive_download(file = as_id("https://docs.google.com/spreadsheets/d/1wgfmPv2kWBDFBl0aVeLK3LuwHbzeMujM/edit?usp=sharing&ouid=100135471101551472212&rtpof=true&sd=true"), 
@@ -43,6 +49,7 @@ edlr <- read_sheet("https://docs.google.com/spreadsheets/d/1LNu4Yzezguc5V_t4Irzo
 #                       type = "xlsx")
 bft <- read_xlsx(here::here("data", "bft_monument_2022-12-05.xlsx"), 
                  sheet = 1)
+names(bft) <- make.names(toupper(names(bft)))
 
 # and quickly subset for just >2015
 bft <- subset(bft, LANDING.YEAR > 2015)
@@ -101,10 +108,13 @@ unique(edlr$TRIP_ID[edlr$mon_activity == 1])
 
 ### BFT ###
 
+# quick look 
 glimpse(bft)
 
-# make better variable names 
-names(bft) <- toupper(make.names(names(bft)))
+# convert to DW those that are round 
+bft$dw_lb <- ifelse(bft$REPORTED.QUANTITY == "ROUND", 
+                    bft$REPORTED.QUANTITY * 0.8, 
+                    bft$REPORTED.QUANTITY)
 
 # make subset of the data for identifying those in monument buffer 
 bft_sub <- bft %>% 
@@ -128,14 +138,68 @@ nobft <- logbook %>%
   group_by(SCHEDULE_NUMBER, NMFS_COMMON, DISPOSITION_STATUS) %>%
   summarize(n_animals = sum(NUMBER_OF_INDIVIDUALS))
 
-## sidebar: where does this line up with the dealer data? 
+## sidebar: where does this line up with the dealer data? ##
 # 
 edlr %>% # also 8/30/22
   filter(TRIP_ID == '221015587')
 
-## End sidebar
+## End sidebar ##
 
-# pull data from BFT that is potentially close to the monument 
+# lets create a new date variable for the logbook data that matches the dealer report
+lb_mon_sub
+lb_mon_sub <- lb_mon_sub %>%
+  mutate(dealer_date = ifelse(SCHEDULE_NUMBER == '221015587', "2021-08-30", LANDING_DATE),
+         ves.date = paste(VESSEL_ID, dealer_date, sep = ".") # add in vessel.date
+         )
+
+### Indicating which landings were Monument landings int he soruce data 
+
+# BFT
+bft_mon <- bft %>% 
+  mutate(ves.date = paste(COAST.GUARD.NBR, LANDING.DATE, sep = "."),
+         monument = ifelse(ves.date %in% lb_mon_sub$ves.date, 1, 0)
+         ) 
+
+# eDealer 
+edlr_mon <- edlr %>%
+  mutate(ves.date = paste(SUPPLIER_VESSEL_ID, DATE_LANDED, sep = "."), 
+         monument = ifelse(ves.date %in% lb_mon_sub$ves.date, 1, 0)
+         ) 
+
+# summarize landings 
+# BFT
+bft_summary <- bft_mon %>% 
+  mutate(COMMON_NAME = "Bluefin", 
+         ) %>%
+  group_by(COAST.GUARD.NBR, LANDING.YEAR, COMMON_NAME, monument) %>%
+  summarize(dw_lb = sum(dw_lb), 
+            revenue = sum(DOLLARS)
+            ) %>%
+  pivot_wider(names_from = monument, 
+              values_from = c(dw_lb, revenue), 
+              values_fill = 0)
+
+# rename for consistency 
+names(bft_summary) <- c("VESSEL_ID", "YEAR", "COMMON_NAME", "DW_LBS_OUT", "DW_LBS_IN", "REVENUE_OUT", "REVENUE_IN")
+# edealer
+edlr_summary <- edlr_mon %>%
+  filter(is.na(not_included)) %>% # remove those that Jackie indicated were dupes 
+  group_by(SUPPLIER_VESSEL_ID, YEAR_OF_LANDING, COMMON_NAME_AS_REPORTED, monument) %>%
+  summarize(dw_lb = sum(converted_dw), 
+            revenue = sum(TOTAL_DOLLARS, na.rm = T)
+            ) %>%
+  pivot_wider(names_from = monument, 
+              values_from = c(dw_lb, revenue), 
+              values_fill = 0)
+
+# rename for consistency
+names(edlr_summary) <- c("VESSEL_ID", "YEAR", "COMMON_NAME", "DW_LBS_OUT", "DW_LBS_IN", "REVENUE_OUT", "REVENUE_IN")
+
+# bring it all together 
+
+f_summary <- bind_rows(edlr_summary, bft_summary) %>%
+  arrange(VESSEL_ID, YEAR, COMMON_NAME)
+  
 
 # Output ------------------------------------------------------------------
 
@@ -145,7 +209,7 @@ edlr %>% # also 8/30/22
 edlr_landings <- edlr %>%
   mutate(YEAR = str_sub(DATE_LANDED, 1, 4), 
          vessel_rev = REPORTED_QUANTITY * PURCHASE_PRICE) %>%
-  filter(is.na(`not included`)) %>%
+  filter(is.na(not_included)) %>%
   group_by(SUPPLIER_VESSEL_ID,  COMMON_NAME_AS_REPORTED) %>%
   summarize(Dealer_Landings = sum(REPORTED_QUANTITY), 
             Total_Dollars = sum(vessel_rev))
@@ -183,3 +247,9 @@ ggplot(data = bft_landings) +
   geom_line(aes(x = LANDING.YEAR, y = Total_Dollars), size = 1.25, color = "forestgreen") + 
   geom_point(aes(x = LANDING.YEAR, y = Total_Dollars), color = "forestgreen") +
   labs(x = "Year", y = "Value", title = "BFT Landings (lbs, red); BFT Total Dollars ($, green)")
+
+## Total lbs/dollars from TRIPS that had activity in the monument area 
+
+## trips that had activity in the monument area 
+
+## panels for vessel - landings and $$
