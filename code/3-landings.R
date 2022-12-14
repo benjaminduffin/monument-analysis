@@ -188,6 +188,7 @@ edlr_summary <- edlr_mon %>%
   summarize(dw_lb = sum(converted_dw), 
             revenue = sum(TOTAL_DOLLARS, na.rm = T)
             ) %>%
+  ungroup() %>%
   pivot_wider(names_from = monument, 
               values_from = c(dw_lb, revenue), 
               values_fill = 0)
@@ -199,9 +200,49 @@ names(edlr_summary) <- c("VESSEL_ID", "YEAR", "COMMON_NAME", "DW_LBS_OUT", "DW_L
 
 f_summary <- bind_rows(edlr_summary, bft_summary) %>%
   arrange(VESSEL_ID, YEAR, COMMON_NAME)
-  
+
+# calculate the percent in/out for each row
+f_summary_sp <- f_summary %>%
+  mutate(TOT_DW_LBS = DW_LBS_OUT + DW_LBS_IN,
+         DW_LBS_IN_PERC = round(DW_LBS_IN / (DW_LBS_OUT + DW_LBS_IN), 2), 
+         TOT_REV = REVENUE_IN + REVENUE_OUT,
+         REVENUE_IN_PERC = round(REVENUE_IN / (REVENUE_IN + REVENUE_OUT), 2)
+         )
+
+# collapse to vessel/year combo
+f_summary_vesyear <- f_summary %>%
+  group_by(VESSEL_ID, YEAR) %>%
+  summarize(DW_LBS_OUT = sum(DW_LBS_OUT), 
+            DW_LBS_IN = sum(DW_LBS_IN), 
+            REVENUE_IN = sum(REVENUE_IN), 
+            REVENUE_OUT = sum(REVENUE_OUT), 
+            TOT_DW_LBS = sum(TOT_DW_LBS), 
+            TOT_REV = sum(TOT_REV)
+            ) %>%
+  mutate(DW_LBS_IN_PERC = round(DW_LBS_IN / (DW_LBS_OUT + DW_LBS_IN), 2), 
+         REVENUE_IN_PERC = round(REVENUE_IN / (REVENUE_IN + REVENUE_OUT), 2))
+
+
+# just by vessel
+f_summary_vessel <- f_summary %>%
+  group_by(VESSEL_ID) %>%
+  summarize(DW_LBS_OUT = sum(DW_LBS_OUT), 
+            DW_LBS_IN = sum(DW_LBS_IN), 
+            REVENUE_IN = sum(REVENUE_IN), 
+            REVENUE_OUT = sum(REVENUE_OUT), 
+            TOT_DW_LBS = sum(TOT_DW_LBS), 
+            TOT_REV = sum(TOT_REV)
+  ) %>%
+  mutate(DW_LBS_IN_PERC = round(DW_LBS_IN / (DW_LBS_OUT + DW_LBS_IN), 2), 
+         REVENUE_IN_PERC = round(REVENUE_IN / (REVENUE_IN + REVENUE_OUT), 2))
 
 # Output ------------------------------------------------------------------
+
+f_summary_list <- list(f_summary_sp, f_summary_vesyear, f_summary_vessel)
+names(f_summary_list) <- c("VesselYearSpecies", "VesselYear", "Vessel")
+# write the final summary 
+write_xlsx(f_summary_list, 
+           here::here("output", paste0("BFT_eDealer_with_monument_", Sys.Date(), ".xlsx")))
 
 # Total landings by vessel and year 
 
